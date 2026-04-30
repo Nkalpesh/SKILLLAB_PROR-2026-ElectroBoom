@@ -143,7 +143,7 @@ The system collects real-time data from online APIs, processes it within the Ras
 
 ## 6.2 Labeled Build Sketch/architecture/flow diagram/algorithm
 
-![Block Diagram](images/Screenshot_2026-04-30_223530.png)
+![Block Diagram](images/Screenshot%202026-04-30%20223530.png)
 
 The physical setup consists of a Raspberry Pi connected to a breadboard. Three LEDs are placed on the breadboard, each connected to a GPIO pin through a resistor. All LEDs share a common ground. The user interacts with the system by observing LED brightness levels.
 
@@ -233,7 +233,7 @@ The system initializes GPIO pins and sets up PWM control. It then fetches data f
 
 ## 8.3 Code Flowchart
 
-![Code Flowchart](images/Screenshot_2026-04-30_224941.png)
+![Code Flowchart](images/Screenshot%202026-04-30%20224941.png)
 
 Start → Initialize GPIO/PWM → Fetch Data (APIs) → Process & Normalize Data → Set LED Brightness → Delay (Sleep) → Repeat
 
