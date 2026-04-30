@@ -1,1 +1,230 @@
-Insert your documented code here
+import requests
+import urllib.parse
+from time import sleep, time
+import math
+from gpiozero import PWMLED
+
+# =============================================================================
+# PULSING GLOW - Raspberry Pi 4B Ambient Data Gauge
+#
+# EXACT WIRING (all GND share Pin 6):
+#   Pin 11 (GPIO 17) -> 220ohm -> RED LED(+)    RED LED(-)    --+
+#   Pin 13 (GPIO 27) -> 220ohm -> YLW LED(+)    YLW LED(-)    --+--> Pin 6 (GND)
+#   Pin 15 (GPIO 22) -> 220ohm -> GRN LED(+)    GRN LED(-)    --+
+# =============================================================================
+
+# --- 1. HARDWARE SETUP ---
+red_led    = PWMLED(17)   # Pin 11 -> 220ohm -> RED LED    -> Pin 6 GND
+yellow_led = PWMLED(27)   # Pin 13 -> 220ohm -> YELLOW LED -> Pin 6 GND
+green_led  = PWMLED(22)   # Pin 15 -> 220ohm -> GREEN LED  -> Pin 6 GND
+
+# --- 2. API CONFIGURATION ---
+WEATHER_API_KEY = "932fe3b8aba8b4faa0a3445219d1162e"
+CITY_NAME       = "Mumbai,IN"
+
+TRAFFIC_API_KEY = "B4avLSOKDRoyr6qS8FJtzDiNjx7tp47a"
+
+# --- 3. THRESHOLDS ---
+TEMP_MIN     = 35  # Yellow LED starts fading in at 35°C
+TEMP_MAX     = 40  # Yellow LED reaches 100% brightness at 40°C+
+DELAY_MIN    = 5
+DELAY_MAX    = 45
+REFRESH_SECS = 600
+
+# --- 4. PULSING GLOW PARAMETERS ---
+PULSE_SPEED_CALM   = 0.8
+PULSE_SPEED_MEDIUM = 1.6
+PULSE_SPEED_ALERT  = 2.5
+PULSE_MIN_BRIGHT   = 0.05
+
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+def map_brightness(value, min_val, max_val):
+    if value >= max_val: return 1.0
+    if value <= min_val: return 0.0
+    return (value - min_val) / (max_val - min_val)
+
+def pulse_value(base_brightness, speed_hz):
+    if base_brightness <= 0.01:
+        return 0.0
+    sine       = math.sin(2 * math.pi * speed_hz * time())
+    normalised = (sine + 1) / 2
+    return PULSE_MIN_BRIGHT + normalised * (base_brightness - PULSE_MIN_BRIGHT)
+
+def get_pulse_speed(alert_level):
+    if alert_level > 0.6:
+        return PULSE_SPEED_ALERT
+    elif alert_level > 0.2:
+        return PULSE_SPEED_MEDIUM
+    else:
+        return PULSE_SPEED_CALM
+
+# =============================================================================
+# API FUNCTIONS
+# =============================================================================
+
+def get_coordinates(address):
+    """Converts a text address into GPS coordinates (Lat,Lon) using TomTom API"""
+    encoded_address = urllib.parse.quote(address)
+    url = f"https://api.tomtom.com/search/2/geocode/{encoded_address}.json?key={TRAFFIC_API_KEY}"
+    
+    try:
+        resp = requests.get(url, timeout=10).json()
+        if "results" in resp and len(resp["results"]) > 0:
+            pos = resp["results"][0]["position"]
+            return f"{pos['lat']},{pos['lon']}"
+        else:
+            print(f"  [Geocode] Could not find location for: {address}")
+            return None
+    except Exception as e:
+        print(f"  [Geocode] Error converting address: {e}")
+        return None
+
+def get_temperature():
+    url = (
+        f"http://api.openweathermap.org/data/2.5/forecast"
+        f"?q={CITY_NAME}&appid={WEATHER_API_KEY}&cnt=1&units=metric"
+    )
+    try:
+        resp = requests.get(url, timeout=10).json()
+        if resp.get("cod") != "200":
+            print(f"  [Weather] Warning: {resp.get('message', 'unknown error')}")
+            return 0
+        temp = resp["list"][0]["main"].get("temp", 0)
+        return temp
+    except requests.exceptions.Timeout:
+        print("  [Weather] Timed out.")
+        return 0
+    except Exception as e:
+        print(f"  [Weather] Error: {e}")
+        return 0
+
+def get_traffic_delay(start_coords, end_coords):
+    url = (
+        f"https://api.tomtom.com/routing/1/calculateRoute"
+        f"/{start_coords}:{end_coords}/json"
+        f"?key={TRAFFIC_API_KEY}&traffic=true&travelMode=car"
+    )
+    try:
+        resp = requests.get(url, timeout=15).json()
+        if "routes" not in resp or len(resp["routes"]) == 0:
+            msg = resp.get("detailedError", {}).get("message", "No routes returned")
+            print(f"  [Traffic] {msg}")
+            return 0
+        summary       = resp["routes"][0]["summary"]
+        delay_seconds = summary.get("trafficDelayInSeconds", 0)
+        total_seconds = summary.get("travelTimeInSeconds", 0)
+        delay_min     = round(delay_seconds / 60.0, 1)
+        total_min     = round(total_seconds  / 60.0, 1)
+        print(f"  [Traffic] Travel: {total_min} min | Delay: {delay_min} min")
+        return delay_min
+    except requests.exceptions.Timeout:
+        print("  [Traffic] Timed out.")
+        return 0
+    except Exception as e:
+        print(f"  [Traffic] Error: {e}")
+        return 0
+
+# =============================================================================
+# STARTUP ANIMATION
+# =============================================================================
+
+def startup_animation():
+    print("Running startup animation (RED -> YELLOW -> GREEN)...")
+    for led in [red_led, yellow_led, green_led]:
+        for i in range(0, 101, 5):
+            led.value = i / 100
+            sleep(0.015)
+        for i in range(100, -1, -5):
+            led.value = i / 100
+            sleep(0.015)
+        led.off()
+        sleep(0.1)
+    for _ in range(2):
+        green_led.value = 1.0
+        sleep(0.2)
+        green_led.off()
+        sleep(0.15)
+    print("All LEDs confirmed OK.\n")
+
+# =============================================================================
+# MAIN LOOP
+# =============================================================================
+
+def main():
+    startup_animation()
+    
+    # ---------------------------------------------------------
+    # NEW: Ask the user for addresses in the terminal
+    # ---------------------------------------------------------
+    print("=== Route Setup ===")
+    source_input = input("Enter Source Address (e.g., 'Andheri, Mumbai'): ")
+    dest_input   = input("Enter Destination Address (e.g., 'Bandra, Mumbai'): ")
+    print("Fetching GPS coordinates...")
+    
+    home_coords = get_coordinates(source_input)
+    work_coords = get_coordinates(dest_input)
+    
+    if not home_coords or not work_coords:
+        print("\nError: Could not find exact GPS coordinates for those addresses.")
+        print("Please restart the script and try more specific locations.")
+        return
+        
+    print(f"Coordinates Locked! Route: {home_coords} -> {work_coords}\n")
+    # ---------------------------------------------------------
+
+    print("Pulsing Glow running | Wiring: GPIO17/27/22 -> 220ohm -> LEDs -> Pin6 GND")
+    print("Press Ctrl+C to stop\n")
+
+    temp_brightness    = 0.0
+    traffic_brightness = 0.0
+    green_brightness   = 1.0
+    last_fetch         = 0
+
+    while True:
+        now = time()
+
+        if now - last_fetch >= REFRESH_SECS:
+            print("--- Fetching New Data ---")
+
+            temperature   = get_temperature()
+            # Pass the dynamically generated coordinates to the traffic function
+            delay_minutes = get_traffic_delay(home_coords, work_coords)
+
+            print(f"  Temperature  : {temperature}°C")
+            print(f"  Traffic Delay: {delay_minutes} min")
+
+            temp_brightness    = map_brightness(temperature,   TEMP_MIN,  TEMP_MAX)
+            traffic_brightness = map_brightness(delay_minutes, DELAY_MIN, DELAY_MAX)
+            green_brightness   = 1.0 - max(temp_brightness, traffic_brightness)
+
+            print(f"  -> RED {round(traffic_brightness*100)}% | "
+                  f"YELLOW {round(temp_brightness*100)}% | "
+                  f"GREEN {round(green_brightness*100)}%\n")
+
+            last_fetch = time()
+
+        alert_level = max(temp_brightness, traffic_brightness)
+        spd         = get_pulse_speed(alert_level)
+
+        red_led.value    = pulse_value(traffic_brightness, spd)
+        yellow_led.value = pulse_value(temp_brightness,    spd)
+        green_led.value  = pulse_value(green_brightness,   PULSE_SPEED_CALM)
+
+        sleep(0.03)
+
+# =============================================================================
+# ENTRY POINT
+# =============================================================================
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nShutting down Pulsing Glow...")
+        red_led.off()
+        yellow_led.off()
+        green_led.off()
+        print("All LEDs off. Goodbye!")
