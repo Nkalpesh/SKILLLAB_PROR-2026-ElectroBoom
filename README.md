@@ -11,7 +11,7 @@
 | **Name** | **Primary Role** | **Secondary Role** | **Strengths Brought to the Project** |
 | --- | --- | --- | --- |
 | Kalpesh Naik (Team Leader) | Logical Thinking, Software, Electronics | Testing, Integration | Circuit design, hardware debugging, Software , API integration |
-| Shikhar Swarup | Coding, Software | Integration | Python programming |
+| Shikhar Swarup | Coding, Software, Hardware | API Integration | Software, Python programming |
 | Sonali Parishwad | Documentation | Coordination | Structured writing, organization |
 | Ayush Kumar Sahu | Documentation | Testing | Debugging |
 
