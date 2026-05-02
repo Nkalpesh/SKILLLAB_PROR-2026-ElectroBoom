@@ -21,39 +21,56 @@ green_led  = PWMLED(22)   # Pin 15 -> 220ohm -> GREEN LED  -> Pin 6 GND
 # --- 2. API CONFIGURATION ---
 WEATHER_API_KEY = "932fe3b8aba8b4faa0a3445219d1162e"
 CITY_NAME       = "Mumbai,IN"
-
 TRAFFIC_API_KEY = "B4avLSOKDRoyr6qS8FJtzDiNjx7tp47a"
 
 # --- 3. THRESHOLDS ---
-TEMP_MIN     = 35  # Yellow LED starts fading in at 35°C
-TEMP_MAX     = 40  # Yellow LED reaches 100% brightness at 40°C+
-DELAY_MIN    = 5
-DELAY_MAX    = 45
-REFRESH_SECS = 600
+TEMP_MIN     = 30    # Yellow LED starts at 30 deg C
+TEMP_MAX     = 35    # Yellow LED full brightness at 35 deg C
+DELAY_MIN    = 5     # Red LED starts at 5 min delay
+DELAY_MAX    = 45    # Red LED full brightness at 45 min delay
+REFRESH_SECS = 600   # Fetch new data every 10 minutes
 
 # --- 4. PULSING GLOW PARAMETERS ---
-PULSE_SPEED_CALM   = 0.8
-PULSE_SPEED_MEDIUM = 1.6
-PULSE_SPEED_ALERT  = 2.5
-PULSE_MIN_BRIGHT   = 0.05
+PULSE_SPEED_CALM   = 0.8    # Hz - slow calm breathing
+PULSE_SPEED_MEDIUM = 1.6    # Hz - moderate alert
+PULSE_SPEED_ALERT  = 2.5    # Hz - fast urgent pulse
+
+# FIX 1: Each LED has its own minimum brightness so it ALWAYS pulses visibly
+# Red never fully off - always at least a faint glow so you know it is alive
+RED_MIN_BRIGHT    = 0.12   # red always pulses between 12% and its base brightness
+YELLOW_MIN_BRIGHT = 0.05
+GREEN_MIN_BRIGHT  = 0.05
 
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
 
 def map_brightness(value, min_val, max_val):
+    """Map a value to 0.0-1.0 brightness range."""
     if value >= max_val: return 1.0
     if value <= min_val: return 0.0
     return (value - min_val) / (max_val - min_val)
 
-def pulse_value(base_brightness, speed_hz):
-    if base_brightness <= 0.01:
-        return 0.0
-    sine       = math.sin(2 * math.pi * speed_hz * time())
-    normalised = (sine + 1) / 2
-    return PULSE_MIN_BRIGHT + normalised * (base_brightness - PULSE_MIN_BRIGHT)
+# FIX 2: pulse_value now takes a per-LED minimum brightness
+# Red LED will ALWAYS pulse even when delay is 0 (min glow = RED_MIN_BRIGHT)
+def pulse_value(base_brightness, speed_hz, min_bright):
+    """
+    Smooth sine-wave breathing. 
+    Ensures there is ALWAYS at least a 10% brightness gap to pulse through, 
+    even if the base_brightness is 0.
+    """
+    # Force the peak of the pulse to be at least 10% higher than the minimum floor
+    peak = max(base_brightness, min_bright + 0.10)
+    
+    sine       = math.sin(2 * math.pi * speed_hz * time())   # Bounces from -1 to 1
+    normalised = (sine + 1) / 2                              # Converts to 0 to 1
+    
+    # Now it will always pulse between the minimum and the peak
+    return min_bright + normalised * (peak - min_bright)
+
 
 def get_pulse_speed(alert_level):
+    """Return pulse speed based on alert severity."""
     if alert_level > 0.6:
         return PULSE_SPEED_ALERT
     elif alert_level > 0.2:
@@ -66,23 +83,23 @@ def get_pulse_speed(alert_level):
 # =============================================================================
 
 def get_coordinates(address):
-    """Converts a text address into GPS coordinates (Lat,Lon) using TomTom API"""
+    """Convert a text address to GPS coordinates using TomTom Geocode API."""
     encoded_address = urllib.parse.quote(address)
     url = f"https://api.tomtom.com/search/2/geocode/{encoded_address}.json?key={TRAFFIC_API_KEY}"
-    
     try:
         resp = requests.get(url, timeout=10).json()
         if "results" in resp and len(resp["results"]) > 0:
             pos = resp["results"][0]["position"]
             return f"{pos['lat']},{pos['lon']}"
         else:
-            print(f"  [Geocode] Could not find location for: {address}")
+            print(f"  [Geocode] Could not find: {address}")
             return None
     except Exception as e:
-        print(f"  [Geocode] Error converting address: {e}")
+        print(f"  [Geocode] Error: {e}")
         return None
 
 def get_temperature():
+    """Fetch current temperature from OpenWeatherMap."""
     url = (
         f"http://api.openweathermap.org/data/2.5/forecast"
         f"?q={CITY_NAME}&appid={WEATHER_API_KEY}&cnt=1&units=metric"
@@ -93,7 +110,7 @@ def get_temperature():
             print(f"  [Weather] Warning: {resp.get('message', 'unknown error')}")
             return 0
         temp = resp["list"][0]["main"].get("temp", 0)
-        return temp
+        return round(temp, 1)
     except requests.exceptions.Timeout:
         print("  [Weather] Timed out.")
         return 0
@@ -102,10 +119,15 @@ def get_temperature():
         return 0
 
 def get_traffic_delay(start_coords, end_coords):
+    """
+    Fetch real traffic delay (minutes) via TomTom Calculate Route API.
+    FIX 3: Falls back to trafficDelayInSeconds if noTrafficTravelTimeInSeconds
+    is missing or equal to travelTimeInSeconds (which gives delay = 0).
+    """
     url = (
         f"https://api.tomtom.com/routing/1/calculateRoute"
         f"/{start_coords}:{end_coords}/json"
-        f"?key={TRAFFIC_API_KEY}&traffic=true&travelMode=car"
+        f"?key={TRAFFIC_API_KEY}&traffic=true&travelMode=car&computeTravelTimeFor=all"
     )
     try:
         resp = requests.get(url, timeout=15).json()
@@ -113,13 +135,36 @@ def get_traffic_delay(start_coords, end_coords):
             msg = resp.get("detailedError", {}).get("message", "No routes returned")
             print(f"  [Traffic] {msg}")
             return 0
-        summary       = resp["routes"][0]["summary"]
-        delay_seconds = summary.get("trafficDelayInSeconds", 0)
-        total_seconds = summary.get("travelTimeInSeconds", 0)
-        delay_min     = round(delay_seconds / 60.0, 1)
-        total_min     = round(total_seconds  / 60.0, 1)
-        print(f"  [Traffic] Travel: {total_min} min | Delay: {delay_min} min")
+
+        summary = resp["routes"][0]["summary"]
+
+        current_travel  = summary.get("travelTimeInSeconds", 0)
+        no_traffic_time = summary.get("noTrafficTravelTimeInSeconds", 0)
+        api_delay       = summary.get("trafficDelayInSeconds", 0)
+
+        # FIX 3: Pick the best delay value available
+        # If noTrafficTravelTimeInSeconds exists and is less than current -> use difference
+        # Otherwise fall back to the direct trafficDelayInSeconds field
+        if no_traffic_time > 0 and current_travel > no_traffic_time:
+            real_delay_seconds = current_travel - no_traffic_time
+            method = "computed"
+        elif api_delay > 0:
+            real_delay_seconds = api_delay
+            method = "api_field"
+        else:
+            # Both methods gave 0 - road might be genuinely clear
+            real_delay_seconds = 0
+            method = "no_delay"
+
+        delay_min = round(real_delay_seconds / 60.0, 1)
+        total_min = round(current_travel / 60.0, 1)
+        empty_min = round(no_traffic_time / 60.0, 1) if no_traffic_time else "N/A"
+
+        print(f"  [Traffic] Empty Road: {empty_min} min | Current Trip: {total_min} min")
+        print(f"  [Traffic] REAL Delay: {delay_min} min  (source: {method})")
+
         return delay_min
+
     except requests.exceptions.Timeout:
         print("  [Traffic] Timed out.")
         return 0
@@ -128,7 +173,7 @@ def get_traffic_delay(start_coords, end_coords):
         return 0
 
 # =============================================================================
-# STARTUP ANIMATION
+# STARTUP ANIMATION - sweeps RED -> YELLOW -> GREEN to verify all 3 LEDs
 # =============================================================================
 
 def startup_animation():
@@ -142,6 +187,7 @@ def startup_animation():
             sleep(0.015)
         led.off()
         sleep(0.1)
+    # Double green flash = ready
     for _ in range(2):
         green_led.value = 1.0
         sleep(0.2)
@@ -155,45 +201,41 @@ def startup_animation():
 
 def main():
     startup_animation()
-    
-    # ---------------------------------------------------------
-    # NEW: Ask the user for addresses in the terminal
-    # ---------------------------------------------------------
+
+    # Ask user for route addresses
     print("=== Route Setup ===")
     source_input = input("Enter Source Address (e.g., 'Andheri, Mumbai'): ")
     dest_input   = input("Enter Destination Address (e.g., 'Bandra, Mumbai'): ")
     print("Fetching GPS coordinates...")
-    
+
     home_coords = get_coordinates(source_input)
     work_coords = get_coordinates(dest_input)
-    
-    if not home_coords or not work_coords:
-        print("\nError: Could not find exact GPS coordinates for those addresses.")
-        print("Please restart the script and try more specific locations.")
-        return
-        
-    print(f"Coordinates Locked! Route: {home_coords} -> {work_coords}\n")
-    # ---------------------------------------------------------
 
-    print("Pulsing Glow running | Wiring: GPIO17/27/22 -> 220ohm -> LEDs -> Pin6 GND")
+    if not home_coords or not work_coords:
+        print("\nError: Could not find GPS coordinates for those addresses.")
+        print("Please restart and try more specific locations (e.g. 'Juhu Beach, Mumbai').")
+        return
+
+    print(f"Route locked: {home_coords} -> {work_coords}\n")
+    print("Pulsing Glow running | GPIO17/27/22 -> 220ohm -> LEDs -> Pin6 GND")
     print("Press Ctrl+C to stop\n")
 
     temp_brightness    = 0.0
     traffic_brightness = 0.0
     green_brightness   = 1.0
-    last_fetch         = 0
+    last_fetch         = 0      # triggers immediate first fetch
 
     while True:
         now = time()
 
+        # --- Fetch new data every REFRESH_SECS ---
         if now - last_fetch >= REFRESH_SECS:
             print("--- Fetching New Data ---")
 
             temperature   = get_temperature()
-            # Pass the dynamically generated coordinates to the traffic function
             delay_minutes = get_traffic_delay(home_coords, work_coords)
 
-            print(f"  Temperature  : {temperature}°C")
+            print(f"  Temperature  : {temperature} deg C")
             print(f"  Traffic Delay: {delay_minutes} min")
 
             temp_brightness    = map_brightness(temperature,   TEMP_MIN,  TEMP_MAX)
@@ -206,14 +248,17 @@ def main():
 
             last_fetch = time()
 
+        # --- Compute pulse speed from alert level ---
         alert_level = max(temp_brightness, traffic_brightness)
         spd         = get_pulse_speed(alert_level)
 
-        red_led.value    = pulse_value(traffic_brightness, spd)
-        yellow_led.value = pulse_value(temp_brightness,    spd)
-        green_led.value  = pulse_value(green_brightness,   PULSE_SPEED_CALM)
+        # --- FIX 2: Pass per-LED minimum brightness to pulse_value ---
+        # Red always glows at least RED_MIN_BRIGHT (12%) so it is visibly pulsing
+        red_led.value    = pulse_value(traffic_brightness, spd,              RED_MIN_BRIGHT)
+        yellow_led.value = pulse_value(temp_brightness,    spd,              YELLOW_MIN_BRIGHT)
+        green_led.value  = pulse_value(green_brightness,   PULSE_SPEED_CALM, GREEN_MIN_BRIGHT)
 
-        sleep(0.03)
+        sleep(0.03)   # ~33 fps smooth animation
 
 # =============================================================================
 # ENTRY POINT
