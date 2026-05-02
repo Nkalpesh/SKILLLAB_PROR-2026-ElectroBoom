@@ -12,7 +12,7 @@
 | --- | --- | --- | --- |
 | Kalpesh Naik (Team Leader) | Logical Thinking, Software, Electronics | Testing, Integration | Circuit design, hardware debugging, Software , API integration |
 | Shikhar Swarup | Coding, Software, Hardware | API Integration | Software, Python programming |
-| Sonali Parishwad | Documentation | Coordination | Structured writing, organization |
+| Sonali Parishwad | Documentation | Debugging, Coordination | Structured writing, organization |
 | Ayush Kumar Sahu | Documentation | Testing | Debugging |
 
 ## 1.3 Project Title
@@ -140,10 +140,11 @@ The system collects real-time data from online APIs, processes it within the Ras
 ## 6.1 Concept Architecture/sketch/schematic
 
 **Concept Flow:** Internet APIs → Data Processing (Python on Raspberry Pi) → GPIO PWM Signals → LED Output
+![Label Diagram](images/lable.jpeg)
 
 ## 6.2 Labeled Build Sketch/architecture/flow diagram/algorithm
 
-![Block Diagram](images/Screenshot%202026-04-30%20223530.png)
+![Block Diagram](images/block_diagram.jpeg)
 
 The physical setup consists of a Raspberry Pi connected to a breadboard. Three LEDs are placed on the breadboard, each connected to a GPIO pin through a resistor. All LEDs share a common ground. The user interacts with the system by observing LED brightness levels.
 
@@ -233,7 +234,7 @@ The system initializes GPIO pins and sets up PWM control. It then fetches data f
 
 ## 8.3 Code Flowchart
 
-![Code Flowchart](images/Screenshot%202026-04-30%20224941.png)
+![Code Flowchart](images/flowchart.jpeg)
 
 Start → Initialize GPIO/PWM → Fetch Data (APIs) → Process & Normalize Data → Set LED Brightness → Delay (Sleep) → Repeat
 
